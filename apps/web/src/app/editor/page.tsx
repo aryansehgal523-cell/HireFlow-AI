@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { scoreResume, type ResumeContent } from "@hireflow/ats-engine";
 import { ExportButtons } from "@/components/ExportButtons";
+import { ResumeImport } from "@/components/ResumeImport";
 
 type Cert = { name: string; issuer?: string; date?: string; url?: string };
 type Lang = { language: string; proficiency?: string };
@@ -195,6 +196,69 @@ export default function Editor() {
     }
   }
 
+  function handleImport(parsed: Record<string, unknown>) {
+    const p = parsed as any;
+    setResume(prev => ({
+      basics: {
+        name: p.basics?.name ?? prev.basics.name,
+        email: p.basics?.email ?? prev.basics.email,
+        phone: p.basics?.phone ?? prev.basics.phone,
+        location: p.basics?.location ?? prev.basics.location,
+        headline: p.basics?.headline ?? prev.basics.headline,
+        links: [
+          ...(p.basics?.linkedin ? [{ label: "LinkedIn", url: p.basics.linkedin }] : []),
+          ...(p.basics?.github ? [{ label: "GitHub", url: p.basics.github }] : []),
+          ...(p.basics?.website ? [{ label: "Website", url: p.basics.website }] : []),
+          ...(prev.basics.links ?? []).filter(l =>
+            !["LinkedIn", "GitHub", "Website"].includes(l.label)
+          ),
+        ],
+      },
+      summary: p.summary || prev.summary,
+      experience: Array.isArray(p.experience) && p.experience.length
+        ? p.experience.map((e: any) => ({
+            company: e.company ?? "",
+            title: e.title ?? "",
+            location: e.location ?? "",
+            start: e.start ?? "",
+            end: e.end ?? null,
+            bullets: Array.isArray(e.bullets) ? e.bullets : [],
+          }))
+        : prev.experience,
+      education: Array.isArray(p.education) && p.education.length
+        ? p.education.map((e: any) => ({
+            school: e.school ?? "",
+            degree: e.degree ?? "",
+            field: e.field ?? "",
+            start: e.start ?? "",
+            end: e.end ?? "",
+            gpa: e.gpa ?? "",
+          }))
+        : prev.education,
+      skills: Array.isArray(p.skills) && p.skills.length ? p.skills : prev.skills,
+      projects: Array.isArray(p.projects) && p.projects.length
+        ? p.projects.map((pr: any) => ({
+            name: pr.name ?? "",
+            url: pr.url ?? "",
+            start: pr.start ?? "",
+            end: pr.end ?? "",
+            bullets: Array.isArray(pr.bullets) ? pr.bullets : [],
+          }))
+        : prev.projects,
+      certifications: Array.isArray(p.certifications) && p.certifications.length
+        ? p.certifications
+        : prev.certifications,
+      languages: Array.isArray(p.languages) && p.languages.length
+        ? p.languages
+        : prev.languages,
+      volunteer: prev.volunteer,
+      awards: Array.isArray(p.awards) && p.awards.length ? p.awards : prev.awards,
+      publications: prev.publications,
+    }));
+    setNotice({ type: "ok", msg: "Resume imported — review and edit any fields below." });
+    setOpen(new Set(["contact", "summary", "experience", "education", "skills", "projects"]));
+  }
+
   const score = ats.overall;
   const scoreColor = score >= 80 ? "text-signal" : score >= 60 ? "text-amber" : "text-red-500";
   const barColor = score >= 80 ? "bg-signal" : score >= 60 ? "bg-amber" : "bg-red-400";
@@ -233,6 +297,8 @@ export default function Editor() {
             {notice.msg}
           </div>
         )}
+
+        <ResumeImport onImport={handleImport} />
 
         {/* ── Contact ── */}
         <div className="card overflow-hidden">

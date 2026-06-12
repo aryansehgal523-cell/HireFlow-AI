@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { headers } from "next/headers";
 import { CheckoutButton } from "@/components/CheckoutButton";
 
 const STATS = [
@@ -51,60 +52,65 @@ const FEATURES = [
   },
 ];
 
-const PLANS = [
-  {
-    name: "Free",
-    price: "₹0",
-    period: "",
-    blurb: "Try the engine",
-    features: [
-      "1 resume with live ATS scoring",
-      "3 ATS scans / month",
-      "All 11 resume sections",
-      "Watermarked PDF export",
-    ],
-    cta: "Start free — no card",
-    href: "/editor",
-    plan: null as null | "PRO" | "EXPERT",
-    highlight: false,
-  },
-  {
-    name: "Pro",
-    price: "₹1,499",
-    period: "/mo",
-    blurb: "Serious job search",
-    features: [
-      "50 resumes & cover letters / month",
-      "Unlimited ATS scans",
-      "AI bullet rewriter + JD tailoring",
-      "PDF & DOCX export (watermark-free)",
-      "Full version history",
-      "Application tracker",
-    ],
-    cta: "Go Pro",
-    href: null,
-    plan: "PRO" as const,
-    highlight: true,
-  },
-  {
-    name: "Expert",
-    price: "₹2,999",
-    period: "/mo",
-    blurb: "Apply at scale",
-    features: [
-      "Everything in Pro",
-      "Live job feed from real boards",
-      "Per-job match score + skills gap",
-      "Apply assistant (pre-filled, you confirm)",
-      "Auto follow-up drafts",
-      "Interview prep AI",
-    ],
-    cta: "Go Expert",
-    href: null,
-    plan: "EXPERT" as const,
-    highlight: false,
-  },
-];
+function getPlans(isIndia: boolean) {
+  return [
+    {
+      name: "Free",
+      price: "₹0",
+      usdPrice: "$0",
+      period: "",
+      blurb: "Try the engine",
+      features: [
+        "1 resume with live ATS scoring",
+        "3 ATS scans / month",
+        "All 11 resume sections",
+        "Watermarked PDF export",
+      ],
+      cta: "Start free — no card",
+      href: "/editor",
+      plan: null as null | "PRO" | "EXPERT",
+      highlight: false,
+    },
+    {
+      name: "Pro",
+      price: isIndia ? "₹999" : "$20",
+      usdPrice: "$20",
+      period: "/mo",
+      blurb: "Serious job search",
+      features: [
+        "25 resumes & cover letters / month",
+        "Unlimited ATS scans",
+        "AI bullet rewriter + JD tailoring",
+        "PDF & DOCX export (watermark-free)",
+        "Full version history",
+        "Application tracker",
+      ],
+      cta: "Go Pro",
+      href: null,
+      plan: "PRO" as const,
+      highlight: true,
+    },
+    {
+      name: "Expert",
+      price: isIndia ? "₹1,499" : "$40",
+      usdPrice: "$40",
+      period: "/mo",
+      blurb: "Apply at scale",
+      features: [
+        "Everything in Pro",
+        "Live job feed from real boards",
+        "Per-job match score + skills gap",
+        "Apply assistant (pre-filled, you confirm)",
+        "Auto follow-up drafts",
+        "Interview prep AI",
+      ],
+      cta: "Go Expert",
+      href: null,
+      plan: "EXPERT" as const,
+      highlight: false,
+    },
+  ];
+}
 
 const TESTIMONIALS = [
   {
@@ -163,7 +169,11 @@ function FaqItem({ q, a }: { q: string; a: string }) {
   );
 }
 
-export default function Landing() {
+export default async function Landing() {
+  const hdrs = await headers();
+  const country = hdrs.get("x-vercel-ip-country") ?? "IN";
+  const isIndia = country === "IN";
+  const PLANS = getPlans(isIndia);
   return (
     <div className="overflow-x-hidden">
       {/* ── HERO ── */}
@@ -395,7 +405,7 @@ export default function Landing() {
           ))}
         </div>
         <p className="mt-8 text-center text-xs text-ink/40">
-          Prices in INR · Secure checkout via Razorpay · Cancel anytime
+          {isIndia ? "Prices in INR · Secure checkout via Razorpay" : "Prices in USD · Secure checkout via Razorpay"} · Cancel anytime
         </p>
       </section>
 
