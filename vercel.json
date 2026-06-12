@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npm run build -w apps/web && npx prisma migrate deploy --schema=apps/web/prisma/schema.prisma",
+  "buildCommand": "npx prisma db push --schema=apps/web/prisma/schema.prisma --accept-data-loss && npm run build -w apps/web",
   "outputDirectory": "apps/web/.next",
   "installCommand": "npm install --legacy-peer-deps",
   "framework": "nextjs",
