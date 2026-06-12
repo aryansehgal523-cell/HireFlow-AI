@@ -20,12 +20,12 @@ export async function POST(req: Request) {
     const watermark = !hasFeature(user.plan, "export_pdf");
 
     const buffer = await renderToBuffer(
-      createElement(ResumePDF, { resume: resume as any, watermark })
+      createElement(ResumePDF, { resume: resume as any, watermark }) as any
     );
 
     const name = (filename ?? "resume").replace(/[^a-z0-9_-]/gi, "_").slice(0, 80);
 
-    return new NextResponse(buffer, {
+    return new NextResponse(new Uint8Array(buffer), {
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename="${name}.pdf"`,

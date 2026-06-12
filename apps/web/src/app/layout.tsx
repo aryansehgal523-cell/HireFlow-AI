@@ -89,7 +89,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </Show>
           <Show when="signed-in">
             <Link href="/dashboard" className="hidden sm:inline-flex btn-ghost py-1.5 px-4 text-sm font-medium">Dashboard</Link>
-            <UserButton afterSignOutUrl="/" />
+            <UserButton />
           </Show>
           <Link href="/editor" className="btn-primary py-1.5 px-4 text-sm font-semibold whitespace-nowrap ml-1">
           Build resume

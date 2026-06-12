@@ -18,11 +18,12 @@ export async function POST(req: Request) {
     const user = await requireUser();
     await consume(user, "cover_letter", "coverLettersGenerated");
     const body = await parseBody(req, schema);
-    const p = coverLetterPrompt({ resumeText: body.resumeText, jd: body.jobDescription, company: body.company, tone: body.tone });
+    const tone = body.tone ?? "professional";
+    const p = coverLetterPrompt({ resumeText: body.resumeText, jd: body.jobDescription, company: body.company, tone });
     const result = await chat("cover_letter", p.system, p.user, 900);
     await recordAiUsage(user.id, "cover_letter", result.model, result.inputTokens, result.outputTokens);
     const saved = await prisma.coverLetter.create({
-      data: { userId: user.id, title: `${body.company} cover letter`, body: result.text, tone: body.tone },
+      data: { userId: user.id, title: `${body.company} cover letter`, body: result.text, tone },
     });
     return NextResponse.json({ id: saved.id, body: result.text });
   } catch (e) {

@@ -195,12 +195,12 @@ export async function POST(req: Request) {
     const { resume, filename } = await parseBody(req, schema);
 
     const watermark = !hasFeature(user.plan, "export_docx");
-    const doc = buildDocx(resume as ResumeContent, watermark);
+    const doc = buildDocx(resume as unknown as ResumeContent, watermark);
     const buffer = await Packer.toBuffer(doc);
 
     const name = (filename ?? "resume").replace(/[^a-z0-9_-]/gi, "_").slice(0, 80);
 
-    return new NextResponse(buffer, {
+    return new NextResponse(new Uint8Array(buffer), {
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "Content-Disposition": `attachment; filename="${name}.docx"`,
