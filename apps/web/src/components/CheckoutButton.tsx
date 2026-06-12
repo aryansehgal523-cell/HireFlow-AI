@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useAuth } from "@clerk/nextjs";
 
 declare global {
   interface Window { Razorpay: any }
@@ -24,10 +25,15 @@ function loadScript(): Promise<boolean> {
 }
 
 export function CheckoutButton({ plan, label, className = "" }: Props) {
+  const { isSignedIn } = useAuth();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleClick() {
+    if (!isSignedIn) {
+      window.location.href = "/sign-in?redirect_url=" + encodeURIComponent(window.location.pathname + window.location.hash);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -89,7 +95,7 @@ export function CheckoutButton({ plan, label, className = "" }: Props) {
   return (
     <div className="w-full">
       <button onClick={handleClick} disabled={busy} className={`w-full ${className}`}>
-        {busy ? "Processing…" : label}
+        {busy ? "Processing…" : !isSignedIn ? `Sign in to ${label}` : label}
       </button>
       {error && (
         <p className="mt-2 text-xs text-red-500 text-center leading-snug">{error}</p>
