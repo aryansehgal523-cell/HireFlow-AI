@@ -1,16 +1,18 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useUser } from "@clerk/nextjs";
+import { AuthGate } from "@/components/AuthGate";
 
 const CATEGORIES = [
-  { id: "behavioral", label: "Behavioral (STAR)", color: "text-signal", bg: "bg-signalSoft" },
-  { id: "technical", label: "Technical", color: "text-blue-600", bg: "bg-blue-50" },
-  { id: "leadership", label: "Leadership", color: "text-purple-600", bg: "bg-purple-50" },
-  { id: "culture", label: "Culture Fit", color: "text-amber", bg: "bg-amber/10" },
-  { id: "situational", label: "Situational", color: "text-pink-600", bg: "bg-pink-50" },
+  { id: "behavioral",  label: "Behavioral (STAR)", color: "text-signal",      bg: "bg-signalSoft"  },
+  { id: "technical",   label: "Technical",          color: "text-blue-600",   bg: "bg-blue-50"     },
+  { id: "leadership",  label: "Leadership",          color: "text-purple-600", bg: "bg-purple-50"   },
+  { id: "culture",     label: "Culture Fit",         color: "text-amber",      bg: "bg-amber/10"    },
+  { id: "situational", label: "Situational",         color: "text-pink-600",   bg: "bg-pink-50"     },
 ];
 
-const QUESTIONS: Record<string, { q: string; hint: string }[]> = {
+const BASE_QUESTIONS: Record<string, { q: string; hint: string }[]> = {
   behavioral: [
     { q: "Tell me about a time you dealt with a difficult stakeholder.", hint: "Focus on empathy, active listening, and the outcome you achieved together." },
     { q: "Describe a project where you had to meet an impossible deadline.", hint: "Show how you prioritized, communicated scope changes, and delivered value despite constraints." },
@@ -36,14 +38,14 @@ const QUESTIONS: Record<string, { q: string; hint: string }[]> = {
     { q: "How do you handle underperformance on your team?", hint: "Show a coaching-first approach: clear expectations, early feedback, documented PIPs, and compassion." },
     { q: "How do you build psychological safety on your team?", hint: "Concrete practices — blameless post-mortems, celebrating well-intentioned failures, modeling vulnerability." },
     { q: "What's your approach to one-on-ones?", hint: "Employee-agenda-first, growth-focused, consistent cadence. Show you actually listen and follow through." },
-    { q: "How do you prioritize when everything is 'urgent'?", hint: "Frameworks are fine, but show judgment: impact × confidence ÷ effort, plus stakeholder communication." },
+    { q: "How do you prioritize when everything is urgent?", hint: "Frameworks are fine, but show judgment: impact × confidence ÷ effort, plus stakeholder communication." },
   ],
   culture: [
-    { q: "Why do you want to work here specifically?", hint: "Be specific to this company — product decision, engineering culture, mission. Generic answers bomb." },
     { q: "What kind of environment helps you do your best work?", hint: "Be honest. Match to what you know of their culture — remote, pace, autonomy, feedback frequency." },
     { q: "Where do you see yourself in 5 years?", hint: "Show ambition without over-promising. Tie growth to adding value at this company." },
     { q: "What's a non-obvious opinion you hold strongly?", hint: "Shows intellectual courage. Pick something genuine and defend it with evidence, not just assertion." },
     { q: "How do you stay current in your field?", hint: "Mention specific sources, projects, or communities — not just 'I read blog posts'." },
+    { q: "What do you look for when joining a new team?", hint: "Show self-awareness: culture, growth, autonomy, mission. Be specific about what actually matters to you." },
   ],
   situational: [
     { q: "You're 2 days from a major launch and find a critical bug. What do you do?", hint: "Show risk assessment, escalation instinct, stakeholder communication, and options thinking." },
@@ -53,9 +55,45 @@ const QUESTIONS: Record<string, { q: string; hint: string }[]> = {
   ],
 };
 
+const CATEGORY_TIPS: Record<string, string[]> = {
+  behavioral: [
+    "Prepare 6–8 core stories that flex across multiple questions.",
+    "Lead with the result — recruiters skim for impact first.",
+    "Every story needs a number. If you don't have one, estimate.",
+    "Keep each answer under 2 minutes unless asked to elaborate.",
+  ],
+  technical: [
+    "Think out loud — interviewers evaluate your problem-solving process.",
+    "Clarify constraints before diving in. Ask about scale, traffic, latency.",
+    "Offer multiple solutions with explicit tradeoffs before picking one.",
+    "Mention real tools you've used, not just textbook concepts.",
+  ],
+  leadership: [
+    "Use numbers: team size, scope, timeline, business impact.",
+    "Show a range — strategy AND hands-on moments.",
+    "Demonstrate that you've given hard feedback and handled conflict.",
+    "Mention failures you've overseen, not just successes.",
+  ],
+  culture: [
+    "Research the company's engineering blog and recent launches.",
+    "Reference specific people, features, or decisions you admire.",
+    "Be honest about environment preferences — mismatches cost everyone.",
+    "Have a genuine question about the team's biggest current challenge.",
+  ],
+  situational: [
+    "Walk through your reasoning — show the decision tree.",
+    "Acknowledge uncertainty and how you'd gather more information.",
+    "Show stakeholder awareness — who's affected and how do you communicate?",
+    "End with what you'd do differently, not just what you'd do.",
+  ],
+};
+
 const TIMER_OPTIONS = [60, 120, 180, 300];
 
 export default function InterviewPrep() {
+  const { isLoaded, isSignedIn, user } = useUser();
+  const [companies, setCompanies] = useState<string[]>([]);
+  const [selectedCompany, setSelectedCompany] = useState<string>("");
   const [category, setCategory] = useState("behavioral");
   const [qIdx, setQIdx] = useState(0);
   const [showHint, setShowHint] = useState(false);
@@ -66,7 +104,40 @@ export default function InterviewPrep() {
   const [running, setRunning] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const questions = QUESTIONS[category] ?? [];
+  // Load user's tracked companies
+  const loadCompanies = useCallback(async () => {
+    try {
+      const res = await fetch("/api/applications");
+      if (res.ok) {
+        const data = await res.json();
+        const unique = [...new Set<string>(
+          (data.applications ?? [])
+            .filter((a: { status: string }) => a.status !== "rejected")
+            .map((a: { company: string }) => a.company)
+            .filter(Boolean)
+        )];
+        setCompanies(unique);
+        if (unique.length > 0) setSelectedCompany(unique[0]);
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (isSignedIn) loadCompanies();
+  }, [isSignedIn, loadCompanies]);
+
+  // Build questions — inject personalized culture question when company selected
+  const questions = (() => {
+    const base = BASE_QUESTIONS[category] ?? [];
+    if (category === "culture" && selectedCompany) {
+      return [
+        { q: `Why do you want to work at ${selectedCompany} specifically?`, hint: `Be specific to ${selectedCompany} — product decisions, engineering culture, mission, recent launches. Generic answers bomb.` },
+        ...base.filter(q => !q.q.startsWith("Why do you want to work")),
+      ];
+    }
+    return base;
+  })();
+
   const current = questions[qIdx];
 
   useEffect(() => {
@@ -75,7 +146,8 @@ export default function InterviewPrep() {
     setShowAnswer(false);
     setAnswer("");
     stopTimer();
-  }, [category]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [category, selectedCompany]);
 
   function startTimer(secs: number) {
     stopTimer();
@@ -84,10 +156,7 @@ export default function InterviewPrep() {
     setRunning(true);
     intervalRef.current = setInterval(() => {
       setElapsed(e => {
-        if (e + 1 >= secs) {
-          stopTimer();
-          return secs;
-        }
+        if (e + 1 >= secs) { stopTimer(); return secs; }
         return e + 1;
       });
     }, 1000);
@@ -101,34 +170,87 @@ export default function InterviewPrep() {
 
   function next() {
     setQIdx(i => (i + 1) % questions.length);
-    setShowHint(false);
-    setShowAnswer(false);
-    setAnswer("");
-    stopTimer();
-    setElapsed(0);
-    setTimer(null);
+    setShowHint(false); setShowAnswer(false); setAnswer("");
+    stopTimer(); setElapsed(0); setTimer(null);
   }
 
   function prev() {
     setQIdx(i => (i - 1 + questions.length) % questions.length);
-    setShowHint(false);
-    setShowAnswer(false);
-    setAnswer("");
-    stopTimer();
-    setElapsed(0);
-    setTimer(null);
+    setShowHint(false); setShowAnswer(false); setAnswer("");
+    stopTimer(); setElapsed(0); setTimer(null);
   }
 
   const timerPct = timer ? Math.round((elapsed / timer) * 100) : 0;
   const timerColor = timerPct >= 90 ? "bg-red-400" : timerPct >= 70 ? "bg-amber" : "bg-signal";
   const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
+  if (!isLoaded) return null;
+
+  if (!isSignedIn) {
+    return (
+      <AuthGate
+        title="Personalized interview prep"
+        description="Sign in to get interview questions tailored to the companies you're applying to, with STAR-method guidance and a practice timer."
+        features={[
+          "Questions personalized to your tracked companies",
+          "Culture-fit questions specific to each company",
+          "STAR method hints for every behavioral question",
+          "Practice timer with visual progress bar",
+          "Behavioral, Technical, Leadership, Situational — 30+ questions",
+        ]}
+        returnPath="/interview"
+      />
+    );
+  }
+
+  const firstName = user.firstName ?? user.emailAddresses?.[0]?.emailAddress?.split("@")[0] ?? "there";
+
   return (
     <div className="mx-auto max-w-4xl px-6 py-10">
-      <div className="mb-8">
+      <div className="mb-6">
         <h1 className="font-display text-2xl font-bold">Interview Prep</h1>
-        <p className="text-sm text-ink/50 mt-0.5">Practice with a timer · STAR-method hints · {Object.values(QUESTIONS).flat().length} questions across 5 categories</p>
+        <p className="text-sm text-ink/50 mt-0.5">
+          Practice with a timer · STAR-method hints · {Object.values(BASE_QUESTIONS).flat().length}+ questions across 5 categories
+        </p>
       </div>
+
+      {/* Personalized company selector */}
+      {companies.length > 0 && (
+        <div className="card p-4 mb-6 flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-ink/70">
+            <span className="text-signal">◎</span>
+            Practicing for:
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {companies.map(c => (
+              <button
+                key={c}
+                onClick={() => { setSelectedCompany(c); setCategory("culture"); }}
+                className={`rounded-full px-3 py-1 text-xs font-medium border transition-colors ${selectedCompany === c && category === "culture"
+                  ? "bg-signal text-white border-signal"
+                  : "border-line text-ink/60 hover:border-signal/50 hover:text-signal"
+                }`}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+          {selectedCompany && (
+            <p className="text-xs text-ink/40 w-full">
+              Culture-fit questions are now tailored to {selectedCompany} — based on your application tracker
+            </p>
+          )}
+        </div>
+      )}
+
+      {companies.length === 0 && (
+        <div className="rounded-lg border border-line bg-signalSoft/30 px-4 py-3 text-sm text-ink/60 mb-6 flex items-center gap-2">
+          <span>💡</span>
+          <span>
+            Add companies in your <a href="/tracker" className="text-signal underline">Application Tracker</a> to get culture-fit questions personalized to each company.
+          </span>
+        </div>
+      )}
 
       {/* STAR guide */}
       <div className="card p-5 mb-6">
@@ -161,7 +283,7 @@ export default function InterviewPrep() {
               className={`w-full text-left rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${category === c.id ? `${c.bg} ${c.color}` : "hover:bg-signalSoft/30 text-ink/60"}`}
             >
               {c.label}
-              <span className="ml-1 text-xs opacity-50">({QUESTIONS[c.id]?.length ?? 0})</span>
+              <span className="ml-1 text-xs opacity-50">({BASE_QUESTIONS[c.id]?.length ?? 0}{c.id === "culture" && selectedCompany ? "+1" : ""})</span>
             </button>
           ))}
         </div>
@@ -184,6 +306,11 @@ export default function InterviewPrep() {
 
           {/* Question */}
           <div className="card p-6">
+            {current?.q.includes(selectedCompany) && selectedCompany && (
+              <div className="inline-flex items-center gap-1 rounded-full bg-signal/10 px-2 py-0.5 text-xs text-signal font-medium mb-3">
+                ◎ Personalized for {selectedCompany}
+              </div>
+            )}
             <p className="font-display text-lg font-semibold leading-snug">{current?.q}</p>
 
             {showHint && (
@@ -193,10 +320,7 @@ export default function InterviewPrep() {
             )}
 
             <div className="flex flex-wrap gap-2 mt-4">
-              <button
-                onClick={() => setShowHint(!showHint)}
-                className="btn-ghost text-xs py-1.5"
-              >
+              <button onClick={() => setShowHint(!showHint)} className="btn-ghost text-xs py-1.5">
                 {showHint ? "Hide hint" : "Show hint"}
               </button>
               <button onClick={prev} className="btn-ghost text-xs py-1.5">← Prev</button>
@@ -214,13 +338,11 @@ export default function InterviewPrep() {
                 </span>
               )}
             </div>
-
             {timer && (
               <div className="h-2 rounded-full bg-line mb-3">
                 <div className={`h-2 rounded-full transition-all ${timerColor}`} style={{ width: `${timerPct}%` }} />
               </div>
             )}
-
             <div className="flex flex-wrap gap-2">
               {TIMER_OPTIONS.map(s => (
                 <button
@@ -231,16 +353,16 @@ export default function InterviewPrep() {
                   {fmtTime(s)}
                 </button>
               ))}
-              {running && (
-                <button onClick={stopTimer} className="btn-ghost text-xs py-1.5 px-3 text-amber">Stop</button>
-              )}
+              {running && <button onClick={stopTimer} className="btn-ghost text-xs py-1.5 px-3 text-amber">Stop</button>}
             </div>
           </div>
 
           {/* Answer scratchpad */}
           <div className="card p-4 space-y-2">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold text-ink/60 uppercase tracking-wide">Your answer (scratchpad)</p>
+              <p className="text-xs font-semibold text-ink/60 uppercase tracking-wide">
+                Your answer, {firstName} (scratchpad)
+              </p>
               <button onClick={() => setShowAnswer(!showAnswer)} className="text-xs text-ink/40 hover:text-ink">
                 {showAnswer ? "Hide" : "Show"}
               </button>
@@ -248,7 +370,7 @@ export default function InterviewPrep() {
             {showAnswer && (
               <textarea
                 className="input min-h-[140px] text-sm"
-                placeholder="Write your STAR answer here to practice. This is private — never saved."
+                placeholder="Write your STAR answer here to practice. This is private — never saved or sent anywhere."
                 value={answer}
                 onChange={e => setAnswer(e.target.value)}
               />
@@ -257,38 +379,11 @@ export default function InterviewPrep() {
 
           {/* Tips */}
           <div className="card p-4">
-            <p className="text-xs font-semibold text-ink/60 uppercase tracking-wide mb-3">Pro tips for this category</p>
+            <p className="text-xs font-semibold text-ink/60 uppercase tracking-wide mb-3">Pro tips for {CATEGORIES.find(c => c.id === category)?.label}</p>
             <ul className="space-y-2 text-xs text-ink/60">
-              {category === "behavioral" && [
-                "Prepare 6–8 core stories that flex across multiple questions.",
-                "Lead with the result — recruiters skim for impact first.",
-                "Every story needs a number. If you don't have one, estimate.",
-                "Keep each answer under 2 minutes unless asked to elaborate.",
-              ].map((t, i) => <li key={i} className="flex gap-2"><span className="text-signal">→</span>{t}</li>)}
-              {category === "technical" && [
-                "Think out loud — interviewers evaluate your problem-solving process.",
-                "Clarify constraints before diving in. Ask about scale, traffic, latency.",
-                "Offer multiple solutions with explicit tradeoffs before picking one.",
-                "Mention real tools you've used, not just textbook concepts.",
-              ].map((t, i) => <li key={i} className="flex gap-2"><span className="text-signal">→</span>{t}</li>)}
-              {category === "leadership" && [
-                "Use numbers: team size, scope, timeline, business impact.",
-                "Show a range — strategy AND hands-on moments.",
-                "Demonstrate that you've given hard feedback and handled conflict.",
-                "Mention failures you've overseen, not just successes.",
-              ].map((t, i) => <li key={i} className="flex gap-2"><span className="text-signal">→</span>{t}</li>)}
-              {category === "culture" && [
-                "Research the company's engineering blog and recent launches.",
-                "Reference specific people, features, or decisions you admire.",
-                "Be honest about environment preferences — mismatches cost everyone.",
-                "Have a genuine question about the team's biggest current challenge.",
-              ].map((t, i) => <li key={i} className="flex gap-2"><span className="text-signal">→</span>{t}</li>)}
-              {category === "situational" && [
-                "Walk through your reasoning — show the decision tree.",
-                "Acknowledge uncertainty and how you'd gather more information.",
-                "Show stakeholder awareness — who's affected and how do you communicate?",
-                "End with what you'd do differently, not just what you'd do.",
-              ].map((t, i) => <li key={i} className="flex gap-2"><span className="text-signal">→</span>{t}</li>)}
+              {(CATEGORY_TIPS[category] ?? []).map((t, i) => (
+                <li key={i} className="flex gap-2"><span className="text-signal">→</span>{t}</li>
+              ))}
             </ul>
           </div>
         </div>
