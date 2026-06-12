@@ -1,110 +1,71 @@
-// Job ingestion from OFFICIAL public APIs only.
-// Greenhouse and Lever expose public, documented job-board endpoints per company.
-// LinkedIn/Indeed scraping is deliberately excluded (terms-of-service violation).
-
 import { prisma } from "./prisma";
-import { extractSkills } from "@hireflow/ats-engine";
 import { JobSource } from "@prisma/client";
+import { randomUUID } from "crypto";
 
-interface NormalizedJob {
-  source: JobSource;
-  externalId: string;
-  title: string;
-  company: string;
-  location?: string;
-  remote: boolean;
-  url: string;
-  description: string;
-  postedAt?: Date;
-}
-
-function stripHtml(html: string): string {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-export async function fetchGreenhouse(boardToken: string): Promise<NormalizedJob[]> {
-  const res = await fetch(
-    `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(boardToken)}/jobs?content=true`,
-    { next: { revalidate: 0 } }
-  );
-  if (!res.ok) throw new Error(`Greenhouse ${boardToken}: ${res.status}`);
-  const data = await res.json();
-  return (data.jobs ?? []).map((j: any) => ({
-    source: "GREENHOUSE" as JobSource,
+async function fetchGreenhouseJobs(board: string) {
+  const res = await fetch(`https://boards-api.greenhouse.io/v1/boards/${board}/jobs?content=true`);
+  if (!res.ok) return [];
+  const data = await res.json().catch(() => ({ jobs: [] }));
+  const name = board.charAt(0).toUpperCase() + board.slice(1);
+  return (data.jobs ?? []).slice(0, 100).map((j: any) => ({
+    source: JobSource.GREENHOUSE,
     externalId: String(j.id),
-    title: j.title,
-    company: boardToken,
-    location: j.location?.name,
-    remote: /remote/i.test(j.location?.name ?? ""),
-    url: j.absolute_url,
-    description: stripHtml(j.content ?? ""),
-    postedAt: j.updated_at ? new Date(j.updated_at) : undefined,
+    title: j.title ?? "Untitled",
+    company: name,
+    location: j.location?.name ?? null,
+    remote: (j.location?.name ?? "").toLowerCase().includes("remote"),
+    url: j.absolute_url ?? "",
+    description: (j.content ?? "").replace(/<[^>]*>/g, "").slice(0, 5000),
+    extractedSkills: [] as string[],
+    postedAt: j.updated_at ? new Date(j.updated_at) : new Date(),
+    isActive: true,
   }));
 }
 
-export async function fetchLever(company: string): Promise<NormalizedJob[]> {
-  const res = await fetch(
-    `https://api.lever.co/v0/postings/${encodeURIComponent(company)}?mode=json`,
-    { next: { revalidate: 0 } }
-  );
-  if (!res.ok) throw new Error(`Lever ${company}: ${res.status}`);
-  const data = await res.json();
-  return (data ?? []).map((j: any) => ({
-    source: "LEVER" as JobSource,
-    externalId: j.id,
-    title: j.text,
-    company,
-    location: j.categories?.location,
-    remote: /remote/i.test(`${j.categories?.location ?? ""} ${j.workplaceType ?? ""}`),
-    url: j.hostedUrl,
-    description: stripHtml(j.descriptionPlain ?? j.description ?? ""),
-    postedAt: j.createdAt ? new Date(j.createdAt) : undefined,
+async function fetchLeverJobs(company: string) {
+  const res = await fetch(`https://api.lever.co/v0/postings/${company}?mode=json`);
+  if (!res.ok) return [];
+  const data = await res.json().catch(() => []);
+  const name = company.charAt(0).toUpperCase() + company.slice(1);
+  return (Array.isArray(data) ? data : []).slice(0, 100).map((j: any) => ({
+    source: JobSource.LEVER,
+    externalId: String(j.id),
+    title: j.text ?? "Untitled",
+    company: name,
+    location: j.categories?.location ?? null,
+    remote: (j.categories?.location ?? "").toLowerCase().includes("remote") || (j.tags ?? []).some((t: string) => t.toLowerCase().includes("remote")),
+    url: j.hostedUrl ?? "",
+    description: (j.descriptionPlain ?? j.description ?? "").replace(/<[^>]*>/g, "").slice(0, 5000),
+    extractedSkills: (j.tags ?? []).slice(0, 20) as string[],
+    postedAt: j.createdAt ? new Date(j.createdAt) : new Date(),
+    isActive: true,
   }));
 }
 
-export async function upsertJobs(jobs: NormalizedJob[]): Promise<number> {
-  let count = 0;
-  for (const j of jobs) {
-    await prisma.job.upsert({
-      where: { source_externalId: { source: j.source, externalId: j.externalId } },
-      update: { isActive: true, description: j.description, title: j.title },
-      create: {
-        ...j,
-        extractedSkills: extractSkills(`${j.title}\n${j.description}`),
-      },
-    });
-    count++;
-  }
-  return count;
-}
+export async function syncConfiguredBoards() {
+  const greenhouse = (process.env.GREENHOUSE_BOARDS ?? "").split(",").map(s => s.trim()).filter(Boolean);
+  const lever = (process.env.LEVER_COMPANIES ?? "").split(",").map(s => s.trim()).filter(Boolean);
+  let synced = 0, failed = 0;
 
-/** Sync a configured list of company boards. Driven by env or admin panel. */
-export async function syncConfiguredBoards(): Promise<{ synced: number }> {
-  const greenhouse = (process.env.GREENHOUSE_BOARDS ?? "stripe,vercel").split(",").filter(Boolean);
-  const lever = (process.env.LEVER_COMPANIES ?? "").split(",").filter(Boolean);
-  let synced = 0;
+  const upsertJob = async (job: any) => {
+    try {
+      await prisma.job.upsert({
+        where: { source_externalId: { source: job.source, externalId: job.externalId } },
+        update: { title: job.title, location: job.location, remote: job.remote, url: job.url, description: job.description, extractedSkills: job.extractedSkills, postedAt: job.postedAt, isActive: true },
+        create: { id: randomUUID(), ...job },
+      });
+      synced++;
+    } catch (_e) { failed++; }
+  };
+
   for (const board of greenhouse) {
-    try {
-      synced += await upsertJobs(await fetchGreenhouse(board.trim()));
-    } catch (e) {
-      console.error("greenhouse sync failed", board, e);
-    }
+    try { const jobs = await fetchGreenhouseJobs(board); await Promise.all(jobs.map(upsertJob)); }
+    catch (_e) { failed++; }
   }
-  for (const c of lever) {
-    try {
-      synced += await upsertJobs(await fetchLever(c.trim()));
-    } catch (e) {
-      console.error("lever sync failed", c, e);
-    }
+  for (const company of lever) {
+    try { const jobs = await fetchLeverJobs(company); await Promise.all(jobs.map(upsertJob)); }
+    catch (_e) { failed++; }
   }
-  return { synced };
+
+  return { synced, failed };
 }
