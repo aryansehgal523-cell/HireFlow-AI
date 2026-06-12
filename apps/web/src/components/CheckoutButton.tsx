@@ -40,9 +40,10 @@ export function CheckoutButton({ plan, label, className = "" }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ plan }),
       });
+      const data = await res.json().catch(() => ({}));
       if (res.status === 401) { window.location.href = "/sign-in"; return; }
-      if (!res.ok) throw new Error("Could not start subscription. Please try again.");
-      const { subscriptionId } = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not start subscription. Please try again.");
+      const { subscriptionId } = data;
 
       await new Promise<void>((resolve, reject) => {
         const rzp = new window.Razorpay({

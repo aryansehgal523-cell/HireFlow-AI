@@ -14,13 +14,20 @@ export async function POST(req: Request) {
     const { plan } = await parseBody(req, schema);
     const p = PLANS[plan];
 
-    const subscription = await (razorpay.subscriptions.create as any)({
-      plan_id: p.planId,
-      total_count: 12,          // renews up to 12 times (1 year); set 0 for infinite
-      quantity: 1,
-      customer_notify: 1,
-      notes: { userId: user.id, plan },
-    });
+    let subscription: { id: string };
+    try {
+      subscription = await (razorpay.subscriptions.create as any)({
+        plan_id: p.planId,
+        total_count: 12,
+        quantity: 1,
+        customer_notify: 1,
+        notes: { userId: user.id, plan },
+      });
+    } catch (rzpErr: any) {
+      const msg = rzpErr?.error?.description ?? rzpErr?.message ?? "Razorpay error";
+      console.error("[billing/order] Razorpay error:", rzpErr);
+      return NextResponse.json({ error: msg }, { status: 502 });
+    }
 
     return NextResponse.json({ subscriptionId: subscription.id });
   } catch (e) {

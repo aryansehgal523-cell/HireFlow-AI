@@ -8,16 +8,16 @@ export const razorpay = new Razorpay({
 export const PLANS = {
   PRO: {
     planId: process.env.RAZORPAY_PLAN_PRO!,
-    amount: 149900,
+    amount: 99900,
     currency: "INR",
-    label: "₹1,499/mo",
+    label: "₹999/mo",
     name: "HireFlow Pro",
   },
   EXPERT: {
     planId: process.env.RAZORPAY_PLAN_EXPERT!,
-    amount: 299900,
+    amount: 149900,
     currency: "INR",
-    label: "₹2,999/mo",
+    label: "₹1,499/mo",
     name: "HireFlow Expert",
   },
 } as const;
