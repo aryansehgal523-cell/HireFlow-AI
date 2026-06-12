@@ -1,0 +1,27 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+      - run: npm run build -w packages/ats-engine
+      - run: npm test -w packages/ats-engine
+      - run: npx prisma generate --schema apps/web/prisma/schema.prisma
+      - run: npm run build -w apps/web
+        env:
+          DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/ci
+  job-sync-cron:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -fsS -X POST "$APP_URL/api/jobs/sync" -H "x-cron-secret: $CRON_SECRET"
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

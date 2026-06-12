@@ -1,0 +1,12 @@
+{
+  "buildCommand": "npm run build -w apps/web",
+  "outputDirectory": "apps/web/.next",
+  "installCommand": "npm install --legacy-peer-deps",
+  "framework": "nextjs",
+  "crons": [
+    {
+      "path": "/api/jobs/sync",
+      "schedule": "0 */6 * * *"
+    }
+  ]
+}

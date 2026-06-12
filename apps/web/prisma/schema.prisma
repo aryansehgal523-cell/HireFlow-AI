@@ -1,0 +1,429 @@
+// HireFlow AI — full production schema
+// Postgres + pgvector for semantic matching
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+// ---------- Identity & billing ----------
+
+enum Plan {
+  FREE
+  PRO
+  EXPERT
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELED
+  INCOMPLETE
+}
+
+model User {
+  id               String   @id @default(cuid())
+  clerkId          String   @unique // Clerk is the auth source of truth
+  email            String   @unique
+  name             String?
+  imageUrl         String?
+  plan             Plan     @default(FREE)
+  isAdmin          Boolean  @default(false)
+  onboardedAt      DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  profile          MasterProfile?
+  subscription     Subscription?
+  resumes          Resume[]
+  coverLetters     CoverLetter[]
+  applications     Application[]
+  savedJobs        SavedJob[]
+  aiUsage          AiUsageEvent[]
+  usagePeriods     UsagePeriod[]
+  automationRuns   AutomationRun[]
+  notifications    Notification[]
+  referralsSent    Referral[] @relation("referrer")
+  referralReceived Referral?  @relation("referee")
+  auditLogs        AuditLog[]
+
+  @@index([plan])
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  userId               String             @unique
+  user                 User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stripeCustomerId     String             @unique
+  stripeSubscriptionId String?            @unique
+  stripePriceId        String?
+  status               SubscriptionStatus @default(INCOMPLETE)
+  plan                 Plan               @default(FREE)
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean            @default(false)
+  trialEndsAt          DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+}
+
+// Monthly metering (resets per billing period)
+model UsagePeriod {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  periodStart     DateTime
+  periodEnd       DateTime
+  resumesGenerated      Int @default(0)
+  coverLettersGenerated Int @default(0)
+  atsScans              Int @default(0)
+  autoApplications      Int @default(0)
+  aiTokensUsed          Int @default(0)
+
+  @@unique([userId, periodStart])
+}
+
+// ---------- Master profile (built from imports) ----------
+
+model MasterProfile {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  headline    String?
+  summary     String?  @db.Text
+  location    String?
+  phone       String?
+  websites    Json     @default("[]") // [{label, url}]
+  skills      String[] // normalized skill slugs
+  languages   String[]
+  // Source imports
+  linkedinUrl String?
+  githubUrl   String?
+  rawImports  Json     @default("{}") // {linkedin: {...}, github: {...}, resumeUpload: {...}}
+  embedding   Unsupported("vector(1536)")?
+  experiences Experience[]
+  educations  Education[]
+  projects    Project[]
+  updatedAt   DateTime @updatedAt
+}
+
+model Experience {
+  id          String        @id @default(cuid())
+  profileId   String
+  profile     MasterProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  company     String
+  title       String
+  location    String?
+  startDate   DateTime?
+  endDate     DateTime?
+  isCurrent   Boolean       @default(false)
+  bullets     String[]      @db.Text
+  sortOrder   Int           @default(0)
+}
+
+model Education {
+  id        String        @id @default(cuid())
+  profileId String
+  profile   MasterProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  school    String
+  degree    String?
+  field     String?
+  startDate DateTime?
+  endDate   DateTime?
+  gpa       String?
+  sortOrder Int           @default(0)
+}
+
+model Project {
+  id        String        @id @default(cuid())
+  profileId String
+  profile   MasterProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  name      String
+  url       String?
+  bullets   String[]      @db.Text
+  sortOrder Int           @default(0)
+}
+
+// ---------- Resumes & cover letters ----------
+
+enum TemplateKey {
+  HARVARD
+  GOOGLE_XYZ
+  FAANG_ENGINEER
+  EXECUTIVE
+  FRESHER
+  DESIGNER
+  MBA
+  ACADEMIC
+  INTERNATIONAL
+  MINIMAL_ATS
+}
+
+model Resume {
+  id           String      @id @default(cuid())
+  userId       String
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title        String
+  template     TemplateKey @default(MINIMAL_ATS)
+  // Canonical structured content; renderers turn this into PDF/DOCX
+  content      Json        // ResumeContent (see packages/ats-engine/src/types.ts)
+  atsScore     Int?
+  atsBreakdown Json?
+  targetJobId  String?     // tailored for a specific job
+  targetJob    Job?        @relation(fields: [targetJobId], references: [id], onDelete: SetNull)
+  isWatermarked Boolean    @default(false)
+  versions     ResumeVersion[]
+  applications Application[]
+  embedding    Unsupported("vector(1536)")?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@index([userId, updatedAt])
+}
+
+model ResumeVersion {
+  id        String   @id @default(cuid())
+  resumeId  String
+  resume    Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  content   Json
+  atsScore  Int?
+  label     String?  // "Before AI rewrite", "Tailored: Stripe SWE", ...
+  createdAt DateTime @default(now())
+
+  @@index([resumeId, createdAt])
+}
+
+model CoverLetter {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  body        String   @db.Text
+  tone        String   @default("professional") // professional|executive|startup|confident|formal
+  jobId       String?
+  job         Job?     @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, updatedAt])
+}
+
+// ---------- Jobs & matching ----------
+
+enum JobSource {
+  GREENHOUSE
+  LEVER
+  ASHBY
+  ADZUNA
+  USAJOBS
+  YC
+  MANUAL
+}
+
+model Job {
+  id              String    @id @default(cuid())
+  source          JobSource
+  externalId      String
+  title           String
+  company         String
+  location        String?
+  remote          Boolean   @default(false)
+  visaSponsorship Boolean?
+  salaryMin       Int?
+  salaryMax       Int?
+  currency        String?
+  url             String
+  description     String    @db.Text
+  extractedSkills String[]
+  postedAt        DateTime?
+  fetchedAt       DateTime  @default(now())
+  isActive        Boolean   @default(true)
+  embedding       Unsupported("vector(1536)")?
+  resumes         Resume[]
+  coverLetters    CoverLetter[]
+  applications    Application[]
+  savedBy         SavedJob[]
+  matches         JobMatch[]
+
+  @@unique([source, externalId])
+  @@index([isActive, postedAt])
+  @@index([company])
+}
+
+model JobMatch {
+  id                   String  @id @default(cuid())
+  jobId                String
+  job                  Job     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  userId               String
+  matchScore           Int     // 0..100
+  interviewProbability Float?  // calibrated 0..1
+  missingSkills        String[]
+  recommendedResumeId  String?
+  aiSummary            String? @db.Text
+  computedAt           DateTime @default(now())
+
+  @@unique([jobId, userId])
+  @@index([userId, matchScore])
+}
+
+model SavedJob {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId  String
+  job    Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, jobId])
+}
+
+// ---------- Applications & automation ----------
+
+enum ApplicationStatus {
+  DRAFT
+  QUEUED
+  SUBMITTED
+  VIEWED
+  INTERVIEW
+  OFFER
+  REJECTED
+  WITHDRAWN
+}
+
+model Application {
+  id            String            @id @default(cuid())
+  userId        String
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId         String?
+  job           Job?              @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  resumeId      String?
+  resume        Resume?           @relation(fields: [resumeId], references: [id], onDelete: SetNull)
+  status        ApplicationStatus @default(DRAFT)
+  appliedAt     DateTime?
+  source        String? // "manual" | "assistant" | platform name
+  notes         String?           @db.Text
+  followUps     FollowUp[]
+  events        ApplicationEvent[]
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([userId, status])
+}
+
+model ApplicationEvent {
+  id            String      @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  type          String // status_change | recruiter_email | interview_scheduled | note
+  payload       Json
+  createdAt     DateTime    @default(now())
+}
+
+model FollowUp {
+  id            String      @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  scheduledFor  DateTime
+  emailDraft    String      @db.Text
+  sentAt        DateTime?
+}
+
+enum AutomationRunStatus {
+  PENDING
+  RUNNING
+  NEEDS_HUMAN
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+// Semi-automated apply assistant runs (human confirms submission)
+model AutomationRun {
+  id          String              @id @default(cuid())
+  userId      String
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status      AutomationRunStatus @default(PENDING)
+  jobIds      String[]
+  steps       Json                @default("[]") // [{jobId, step, status, detail, at}]
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime            @default(now())
+}
+
+// ---------- AI, ops, growth ----------
+
+model AiUsageEvent {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  feature      String // resume_rewrite | cover_letter | ats_suggestions | job_match | interview_prep ...
+  model        String
+  inputTokens  Int
+  outputTokens Int
+  costUsdMicro Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([feature, createdAt])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  body      String?
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, readAt])
+}
+
+model Referral {
+  id         String   @id @default(cuid())
+  referrerId String
+  referrer   User     @relation("referrer", fields: [referrerId], references: [id], onDelete: Cascade)
+  refereeId  String?  @unique
+  referee    User?    @relation("referee", fields: [refereeId], references: [id], onDelete: SetNull)
+  code       String   @unique
+  rewardedAt DateTime?
+  createdAt  DateTime @default(now())
+}
+
+model Coupon {
+  id            String   @id @default(cuid())
+  code          String   @unique
+  stripeCouponId String
+  percentOff    Int?
+  maxRedemptions Int?
+  redemptions   Int      @default(0)
+  expiresAt     DateTime?
+  active        Boolean  @default(true)
+}
+
+model FeatureFlag {
+  key       String  @id
+  enabled   Boolean @default(false)
+  rules     Json    @default("{}") // e.g. {plans:["EXPERT"], percentRollout: 25}
+  updatedAt DateTime @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String
+  target    String?
+  ip        String?
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([action, createdAt])
+}
